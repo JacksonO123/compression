@@ -1,20 +1,47 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    env,
+    fmt::Display,
+    fs::{self, File},
+    io::{Result, Write},
+};
+
+use rand::{thread_rng, Rng};
+
+#[derive(Debug)]
+struct Group {
+    data: String,
+    occurances: u32,
+    weight: u32,
+}
+
+impl Group {
+    fn new(data: String, occurances: u32) -> Self {
+        let weight = Self::calculate_weight(&data, occurances);
+
+        Self {
+            data,
+            weight,
+            occurances,
+        }
+    }
+
+    fn calculate_weight(data: &String, occurances: u32) -> u32 {
+        return data.len() as u32 * occurances;
+    }
+}
 
 struct Mapping {
     free_chars: Vec<char>,
-    map_frames: Vec<HashMap<String, String>>,
+    value_map: HashMap<String, String>,
     ctrl_char: char,
     repeat_char: char,
 }
 
 impl Mapping {
-    fn new(source: &String) -> Self {
-        // let mut free_chars = find_free_chars(source);
-        // let mut free_chars = vec!['a', 'b', 'c', 'd', 'e', 'f', 'g'];
-        let mut free_chars = vec![
-            '!', '@', '#', '$', '%', '^', '|', '*', '(', ')', '-', '+', '/', ',', '.', '<', '>',
-            '[', ']', '{', '}', '?', '&',
-        ];
+    fn new() -> Self {
+        let char_str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890~`!@#$%^&*()-=_+[{}]|;:'\"\\,<.>/?";
+        let mut free_chars: Vec<char> = char_str.chars().collect();
 
         let ctrl_char = free_chars.pop().unwrap();
         let repeat_char = free_chars.pop().unwrap();
@@ -23,80 +50,149 @@ impl Mapping {
             ctrl_char,
             repeat_char,
             free_chars,
-            map_frames: vec![],
+            value_map: HashMap::new(),
         }
     }
 
-    fn next_key(&mut self) -> String {
+    fn next_key(&self) -> String {
         if self.free_chars.len() == 0 {
             panic!("no free chars");
         }
 
-        return String::from(self.free_chars.pop().unwrap());
+        String::from(self.free_chars.last().unwrap().to_string())
     }
 
-    fn insert(&mut self, key: &String, value: &String) {
-        if let Some(frame) = self.map_frames.get_mut(0) {
-            frame.insert(key.clone(), value.clone());
-        } else {
-            let mut frame: HashMap<String, String> = HashMap::new();
-            frame.insert(key.clone(), value.clone());
-            self.map_frames.push(frame);
-        }
+    fn key_used(&mut self) {
+        self.free_chars.pop();
     }
 
-    fn print_frame(&self) {
-        println!("{:?}", self.map_frames);
+    fn insert(&mut self, key: String, value: String) {
+        self.value_map.insert(key, value);
     }
 
     fn stringify(&self, compressed: String) -> String {
-        let mut res = if self.map_frames.len() > 0 {
+        let mut res = if self.value_map.len() > 0 {
             self.ctrl_char.to_string()
         } else {
             String::new()
         };
 
-        for frame in self.map_frames.iter() {
-            for (key, value) in frame.iter() {
-                res.push_str(key);
-                res.push('=');
-                res.push_str(value);
-                res.push(self.ctrl_char);
-            }
+        for (key, value) in self.value_map.iter() {
+            res.push_str(key);
+            res.push('=');
+            res.push_str(value);
+            res.push(self.ctrl_char);
         }
 
         res.push_str(&compressed);
 
         res
     }
+
+    fn predict_len(&self, source_len: usize) -> usize {
+        let mut key_len = if self.value_map.len() > 0 { 1 } else { 0 };
+
+        for (key, value) in self.value_map.iter() {
+            // 2 because 1 for '=' and 1 for ctrl char
+            key_len += key.len() + value.len() + 2;
+        }
+
+        key_len += source_len;
+
+        key_len
+    }
 }
 
-fn main() {
-    // let mut source = String::from("aaaaaaabababababababababababab");
-    let mut source = String::from("abababab");
-    // let mut source = String::from(
-    //     "there are many jobs so many jobs idk what else to so yeah jobs more times say jobs",
-    // );
-    let input = source.clone();
+impl Display for Mapping {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        println!("{:?}", self.value_map);
 
-    let mut mapping = Mapping::new(&source);
+        Ok(())
+    }
+}
 
-    compress(&mut mapping, &mut source);
-    compress(&mut mapping, &mut source);
+fn main() -> Result<()> {
+    let mut args: Vec<String> = env::args().collect();
+    args.remove(0);
 
-    println!("input: {}", input);
-    mapping.print_frame();
+    let info = args.get(0).expect("Expected mode");
 
-    let res = mapping.stringify(source);
-    println!("> {}", res);
+    match info.as_str() {
+        "-g" => {
+            let mut rng = thread_rng();
+
+            let output = "data/text.txt";
+            let random_words = vec![
+                "this",
+                "word",
+                "random",
+                "computer",
+                "mouse",
+                "food",
+                "cheese",
+                "book",
+                "table",
+                "why",
+                "would",
+                "work",
+                "something",
+                "idk",
+                "epic",
+                "more",
+                "different",
+                "im",
+                "done",
+            ];
+            let num_words = 200;
+            let mut random_str = String::new();
+
+            for i in 0..num_words {
+                let index = rng.gen_range(0..random_words.len());
+                random_str.push_str(&random_words[index].clone());
+
+                if i < num_words - 1 {
+                    random_str.push(' ');
+                }
+            }
+
+            let mut file = File::create(output)?;
+            file.write_all(random_str.as_bytes())?;
+        }
+        _ => {
+            let outfile_name = info.to_owned() + ".smol";
+
+            let mut source = fs::read_to_string(info)?;
+            let input = source.clone();
+
+            let mut mapping = Mapping::new();
+
+            compress(&mut mapping, &mut source);
+
+            println!("{}", mapping);
+            println!("input: {}", input);
+
+            let res = mapping.stringify(source);
+            println!("{}", res);
+
+            let mut file = File::create(outfile_name)?;
+            file.write_all(res.as_bytes())?;
+        }
+    };
+
+    Ok(())
 }
 
 fn compress(mapping: &mut Mapping, source: &mut String) {
     collapse_repeats(mapping, source);
-    println!("{}", source);
-    create_groups(mapping, source);
-    println!("{}", source);
-    mapping.print_frame();
+
+    loop {
+        let used = create_groups(mapping, source);
+        println!("{}", mapping.predict_len(source.len()));
+
+        if !used {
+            break;
+        }
+    }
 }
 
 fn collapse_repeats(mapping: &mut Mapping, source: &mut String) {
@@ -129,47 +225,54 @@ fn collapse_repeats(mapping: &mut Mapping, source: &mut String) {
     }
 }
 
-fn create_groups(mapping: &mut Mapping, source: &mut String) {
-    let mut start = 0;
-    let mut end = 2;
+fn create_groups(mapping: &mut Mapping, source: &mut String) -> bool {
+    let mut best_group: Option<Group> = None;
 
-    while end - start < source.len() / 2 {
+    let mut start = 0;
+    let mut end = source.len() / 4;
+
+    while start != end - 1 {
         let slice = String::from(&source[start..end]);
 
         let count = find_occurances(source, &slice);
 
         if count > 1 {
-            collapse_groups(mapping, source, &slice);
-            // 2 because after that is starts mattering ig idk
-            if slice.len() > 2 {
-                let next_key = mapping.next_key();
-                mapping.insert(&next_key, &slice.to_string());
-                replace_all(source, &slice.to_string(), &next_key);
-            }
-
-            if end > source.len() {
-                let diff = end - source.len() - 1;
-
-                if diff > start {
-                    start = 0;
-                } else {
-                    start -= diff;
+            let new_group = Group::new(slice.clone().to_string(), count);
+            if let Some(ref mut best_group) = &mut best_group {
+                if new_group.weight > best_group.weight {
+                    *best_group = new_group;
                 }
-
-                end = source.len();
-
-                continue;
+            } else {
+                best_group = Some(new_group);
             }
         }
 
         if end == source.len() {
-            end = source.len() - start + 1;
+            end = source.len() - start - 1;
             start = 0;
         } else {
             start += 1;
             end += 1;
         }
     }
+
+    if let Some(group) = best_group {
+        collapse_groups(mapping, source, &group.data);
+        let next_key = mapping.next_key();
+        let added_len =
+            3 + group.data.len() as u32 + (next_key.len() as u32 * (group.occurances + 1));
+        let removed_len = group.data.len() as u32 * group.occurances;
+
+        if added_len < removed_len {
+            mapping.key_used();
+            mapping.insert(next_key.clone(), group.data.clone());
+            replace_all(source, &group.data, &next_key);
+
+            return true;
+        }
+    }
+
+    false
 }
 
 fn collapse_groups(mapping: &mut Mapping, source: &mut String, target: &String) {
@@ -204,7 +307,7 @@ fn replace_all(source: &mut String, target: &String, new_value: &String) {
     }
 }
 
-fn find_occurances(source: &str, substr: &str) -> usize {
+fn find_occurances(source: &str, substr: &str) -> u32 {
     let mut count = 0;
 
     let source_chars: Vec<char> = source.chars().collect();
@@ -224,17 +327,4 @@ fn find_occurances(source: &str, substr: &str) -> usize {
     }
 
     count
-}
-
-fn find_free_chars(source: &str) -> Vec<char> {
-    let mut res = vec![];
-
-    for i in (0..128 as u8).rev() {
-        if (i as char).is_ascii() && !source.contains(i as char) {
-            println!("{i}");
-            res.push(i as char);
-        }
-    }
-
-    res
 }
