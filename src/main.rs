@@ -7,16 +7,23 @@ use std::{
 };
 
 use rand::{thread_rng, Rng};
+use regex::Regex;
+
+#[derive(Debug)]
+enum DecompressState {
+    Mapping,
+    Repeat,
+}
 
 #[derive(Debug)]
 struct Group {
     data: String,
-    occurances: u32,
-    weight: u32,
+    occurances: usize,
+    weight: usize,
 }
 
 impl Group {
-    fn new(data: String, occurances: u32) -> Self {
+    fn new(data: String, occurances: usize) -> Self {
         let weight = Self::calculate_weight(&data, occurances);
 
         Self {
@@ -26,8 +33,8 @@ impl Group {
         }
     }
 
-    fn calculate_weight(data: &String, occurances: u32) -> u32 {
-        return data.len() as u32 * occurances;
+    fn calculate_weight(data: &String, occurances: usize) -> usize {
+        return data.len() * occurances;
     }
 }
 
@@ -54,6 +61,14 @@ impl Mapping {
         }
     }
 
+    fn set_ctrl_char(&mut self, ctrl_char: char) {
+        self.ctrl_char = ctrl_char;
+    }
+
+    fn set_repeat_char(&mut self, repeat_char: char) {
+        self.repeat_char = repeat_char;
+    }
+
     fn next_key(&self) -> String {
         if self.free_chars.len() == 0 {
             panic!("no free chars");
@@ -72,9 +87,11 @@ impl Mapping {
 
     fn stringify(&self, compressed: String) -> String {
         let mut res = if self.value_map.len() > 0 {
-            self.ctrl_char.to_string()
+            let mut temp = String::from(self.repeat_char);
+            temp.push(self.ctrl_char);
+            temp
         } else {
-            String::new()
+            String::from(self.repeat_char)
         };
 
         for (key, value) in self.value_map.iter() {
@@ -105,6 +122,7 @@ impl Mapping {
 
 impl Display for Mapping {
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        println!("cmd: {}, repeat: {}", self.ctrl_char, self.repeat_char);
         println!("{:?}", self.value_map);
 
         Ok(())
@@ -158,20 +176,34 @@ fn main() -> Result<()> {
             let mut file = File::create(output)?;
             file.write_all(random_str.as_bytes())?;
         }
+        "-d" => {
+            let input_file = args.get(1).expect("Expected input file for decompression");
+            let output_file = args.get(2);
+
+            let data = fs::read_to_string(input_file)?;
+            println!("decompressing: {}", data);
+            let res = decompress(&data);
+
+            if let Some(output_file) = output_file {
+                // write
+            } else {
+                println!("{}", res);
+            }
+        }
         _ => {
             let outfile_name = info.to_owned() + ".smol";
 
-            let mut source = fs::read_to_string(info)?;
+            let source = fs::read_to_string(info)?;
             let input = source.clone();
 
             let mut mapping = Mapping::new();
 
-            compress(&mut mapping, &mut source);
+            let compressed_source = compress(&mut mapping, &source);
 
             println!("{}", mapping);
-            println!("input: {}", input);
+            println!("{}", input);
 
-            let res = mapping.stringify(source);
+            let res = mapping.stringify(compressed_source);
             println!("{}", res);
 
             let mut file = File::create(outfile_name)?;
@@ -182,17 +214,107 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn compress(mapping: &mut Mapping, source: &mut String) {
-    collapse_repeats(mapping, source);
+fn decompress(source: &String) -> String {
+    let mut source_clone = source.clone();
+
+    let mapping = expand_gen_map(&mut source_clone);
+    replace_mapping(&mapping, &mut source_clone);
+
+    source_clone
+}
+
+fn replace_mapping(mapping: &Mapping, source: &mut String) {
+    for (key, value) in mapping.value_map.iter() {
+        let reg = Regex::new(key).unwrap();
+        let new = reg.replace_all(source, value);
+        *source = new.to_string();
+    }
+}
+
+fn expand_gen_map(source: &mut String) -> Mapping {
+    let mut res = String::new();
+    let mut mapping = Mapping::new();
+
+    let chars: Vec<char> = source.chars().collect();
+
+    let repeat_char = chars[0];
+    let ctrl_char = chars[1];
+
+    mapping.set_ctrl_char(ctrl_char);
+    mapping.set_repeat_char(repeat_char);
+
+    let mut buf = String::new();
+    let mut current_key = String::new();
+    let mut state: Option<DecompressState> = None;
+    let mut to_repeat = 1;
+
+    let mut i = 1;
+    while i < chars.len() {
+        if chars[i] == ctrl_char {
+            i += 1;
+
+            loop {
+                if chars[i] == '=' {
+                    current_key = buf.clone();
+                    buf.clear();
+                    state = Some(DecompressState::Mapping);
+                } else if chars[i] == mapping.ctrl_char {
+                    if let Some(state) = &state {
+                        match state {
+                            DecompressState::Mapping => {
+                                mapping.insert(current_key.clone(), buf.clone());
+                                current_key.clear();
+                                buf.clear();
+                                break;
+                            }
+                            DecompressState::Repeat => {
+                                res.push_str(&buf.repeat(to_repeat));
+                                buf.clear();
+                                break;
+                            }
+                        }
+                    } else {
+                        to_repeat = buf.parse().expect("Error getting repeat number");
+                        buf.clear();
+                        state = Some(DecompressState::Repeat);
+                    }
+                } else {
+                    buf.push(chars[i]);
+                }
+
+                i += 1;
+            }
+
+            state = None;
+        } else {
+            buf.push(chars[i]);
+        }
+
+        i += 1;
+    }
+
+    res.push_str(&buf);
+
+    *source = res;
+
+    mapping
+}
+
+fn compress(mapping: &mut Mapping, source: &String) -> String {
+    let mut res = source.clone();
+
+    collapse_repeats(mapping, &mut res);
 
     loop {
-        let used = create_groups(mapping, source);
-        println!("{}", mapping.predict_len(source.len()));
+        let used = create_groups(mapping, &mut res);
+        println!("{}", mapping.predict_len(res.len()));
 
         if !used {
             break;
         }
     }
+
+    res
 }
 
 fn collapse_repeats(mapping: &mut Mapping, source: &mut String) {
@@ -232,9 +354,9 @@ fn create_groups(mapping: &mut Mapping, source: &mut String) -> bool {
     let mut end = source.len() / 4;
 
     while start != end - 1 {
-        let slice = String::from(&source[start..end]);
+        let slice = &source[start..end];
 
-        let count = find_occurances(source, &slice);
+        let count = source.match_indices(&slice).collect::<Vec<_>>().len();
 
         if count > 1 {
             let new_group = Group::new(slice.clone().to_string(), count);
@@ -257,13 +379,26 @@ fn create_groups(mapping: &mut Mapping, source: &mut String) -> bool {
     }
 
     if let Some(group) = best_group {
-        collapse_groups(mapping, source, &group.data);
+        let mut start_len = source.len();
+        let collapsed = collapse_groups(mapping, source, &group.data);
         let next_key = mapping.next_key();
-        let added_len =
-            3 + group.data.len() as u32 + (next_key.len() as u32 * (group.occurances + 1));
-        let removed_len = group.data.len() as u32 * group.occurances;
 
-        if added_len < removed_len {
+        let new_occurances = group.occurances - collapsed + 1;
+
+        if collapsed > 0 {
+            start_len += 3 + collapsed.to_string().len() + group.data.len();
+            start_len -= group.data.len() * (collapsed - 1);
+        }
+
+        // 3 because cmd + '=' + cmd
+        // next_key.len() * occurances + 1 because the key exists the number of occurances and also
+        // when it is defined
+        // group.group.len() * occurances - 1 because the data is being replaced all except when it
+        // is being defined
+        let with_map_len = start_len + 3 + (next_key.len() * (new_occurances + 1))
+            - (group.data.len() * (new_occurances - 1));
+
+        if with_map_len < start_len {
             mapping.key_used();
             mapping.insert(next_key.clone(), group.data.clone());
             replace_all(source, &group.data, &next_key);
@@ -275,7 +410,7 @@ fn create_groups(mapping: &mut Mapping, source: &mut String) -> bool {
     false
 }
 
-fn collapse_groups(mapping: &mut Mapping, source: &mut String, target: &String) {
+fn collapse_groups(mapping: &mut Mapping, source: &mut String, target: &String) -> usize {
     let start_index = source.find(target).unwrap();
     let mut index = start_index;
     let mut slice = &source[index + target.len()..];
@@ -297,34 +432,15 @@ fn collapse_groups(mapping: &mut Mapping, source: &mut String, target: &String) 
         replace_val.push_str(&count.to_string());
         replace_val.push(mapping.ctrl_char);
         replace_val.push_str(target);
+        replace_val.push(mapping.ctrl_char);
         *source = source.replace(&source[start_index..index], &replace_val)
     }
+
+    count
 }
 
 fn replace_all(source: &mut String, target: &String, new_value: &String) {
     while source.contains(target) {
         *source = source.replace(target, new_value);
     }
-}
-
-fn find_occurances(source: &str, substr: &str) -> u32 {
-    let mut count = 0;
-
-    let source_chars: Vec<char> = source.chars().collect();
-    let substr_chars: Vec<char> = substr.chars().collect();
-
-    let mut i = 0;
-    'outer: while i < source_chars.len() {
-        for j in 0..substr_chars.len() {
-            if i + j >= source_chars.len() || source_chars[i + j] != substr_chars[j] {
-                i += 1;
-                continue 'outer;
-            }
-        }
-
-        i += substr.len();
-        count += 1;
-    }
-
-    count
 }
