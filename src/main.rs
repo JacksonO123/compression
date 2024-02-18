@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     env,
     fmt::Display,
     fs::{self, File},
@@ -7,7 +6,12 @@ use std::{
 };
 
 use rand::{thread_rng, Rng};
-use regex::Regex;
+
+#[derive(Debug)]
+struct Pair {
+    key: String,
+    value: String,
+}
 
 #[derive(Debug)]
 enum DecompressState {
@@ -40,14 +44,14 @@ impl Group {
 
 struct Mapping {
     free_chars: Vec<char>,
-    value_map: HashMap<String, String>,
+    values: Vec<Pair>,
     ctrl_char: char,
     repeat_char: char,
 }
 
 impl Mapping {
     fn new() -> Self {
-        let char_str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890~`!@#$%^&*()-=_+[{}]|;:'\"\\,<.>/?";
+        let char_str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890~`!@#$%^&*()-_+[{}]|;:'\"\\,<.>/?";
         let mut free_chars: Vec<char> = char_str.chars().collect();
 
         let ctrl_char = free_chars.pop().unwrap();
@@ -57,7 +61,7 @@ impl Mapping {
             ctrl_char,
             repeat_char,
             free_chars,
-            value_map: HashMap::new(),
+            values: vec![],
         }
     }
 
@@ -82,11 +86,11 @@ impl Mapping {
     }
 
     fn insert(&mut self, key: String, value: String) {
-        self.value_map.insert(key, value);
+        self.values.push(Pair { key, value });
     }
 
     fn stringify(&self, compressed: String) -> String {
-        let mut res = if self.value_map.len() > 0 {
+        let mut res = if self.values.len() > 0 {
             let mut temp = String::from(self.repeat_char);
             temp.push(self.ctrl_char);
             temp
@@ -94,10 +98,14 @@ impl Mapping {
             String::from(self.repeat_char)
         };
 
-        for (key, value) in self.value_map.iter() {
-            res.push_str(key);
+        for (i, pair) in self.values.iter().enumerate() {
+            if i != 0 {
+                res.push(self.ctrl_char);
+            }
+
+            res.push_str(&pair.key);
             res.push('=');
-            res.push_str(value);
+            res.push_str(&pair.value);
             res.push(self.ctrl_char);
         }
 
@@ -107,11 +115,11 @@ impl Mapping {
     }
 
     fn predict_len(&self, source_len: usize) -> usize {
-        let mut key_len = if self.value_map.len() > 0 { 1 } else { 0 };
+        let mut key_len = if self.values.len() > 0 { 1 } else { 0 };
 
-        for (key, value) in self.value_map.iter() {
+        for pair in self.values.iter() {
             // 2 because 1 for '=' and 1 for ctrl char
-            key_len += key.len() + value.len() + 2;
+            key_len += pair.key.len() + pair.value.len() + 2;
         }
 
         key_len += source_len;
@@ -123,7 +131,7 @@ impl Mapping {
 impl Display for Mapping {
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         println!("cmd: {}, repeat: {}", self.ctrl_char, self.repeat_char);
-        println!("{:?}", self.value_map);
+        println!("{:?}", self.values);
 
         Ok(())
     }
@@ -224,10 +232,10 @@ fn decompress(source: &String) -> String {
 }
 
 fn replace_mapping(mapping: &Mapping, source: &mut String) {
-    for (key, value) in mapping.value_map.iter() {
-        let reg = Regex::new(key).unwrap();
-        let new = reg.replace_all(source, value);
-        *source = new.to_string();
+    for pair in mapping.values.iter().rev() {
+        while source.contains(&pair.key) {
+            *source = source.replace(&pair.key, &pair.value);
+        }
     }
 }
 
@@ -252,6 +260,8 @@ fn expand_gen_map(source: &mut String) -> Mapping {
     while i < chars.len() {
         if chars[i] == ctrl_char {
             i += 1;
+
+            buf.clear();
 
             loop {
                 if chars[i] == '=' {
