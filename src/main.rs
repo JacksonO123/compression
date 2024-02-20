@@ -115,11 +115,11 @@ impl Mapping {
     }
 
     fn predict_len(&self, source_len: usize) -> usize {
-        let mut key_len = if self.values.len() > 0 { 1 } else { 0 };
+        let mut key_len = if self.values.len() > 0 { 2 } else { 1 };
 
         for pair in self.values.iter() {
-            // 2 because 1 for '=' and 1 for ctrl char
-            key_len += pair.key.len() + pair.value.len() + 2;
+            // 3 because 1 for '=' and 2 for ctrl char
+            key_len += pair.key.len() + pair.value.len() + 3;
         }
 
         key_len += source_len;
@@ -261,6 +261,7 @@ fn expand_gen_map(source: &mut String) -> Mapping {
         if chars[i] == ctrl_char {
             i += 1;
 
+            res.push_str(&buf);
             buf.clear();
 
             loop {
