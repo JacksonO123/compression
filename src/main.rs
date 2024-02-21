@@ -90,12 +90,10 @@ impl Mapping {
     }
 
     fn stringify(&self, compressed: String) -> String {
-        let mut res = if self.values.len() > 0 {
+        let mut res = {
             let mut temp = String::from(self.repeat_char);
             temp.push(self.ctrl_char);
             temp
-        } else {
-            String::from(self.repeat_char)
         };
 
         for (i, pair) in self.values.iter().enumerate() {
@@ -243,7 +241,7 @@ fn expand_gen_map(source: &mut String) -> Mapping {
     let mut res = String::new();
     let mut mapping = Mapping::new();
 
-    let chars: Vec<char> = source.chars().collect();
+    let mut chars: Vec<char> = source.chars().collect();
 
     let repeat_char = chars[0];
     let ctrl_char = chars[1];
@@ -251,57 +249,82 @@ fn expand_gen_map(source: &mut String) -> Mapping {
     mapping.set_ctrl_char(ctrl_char);
     mapping.set_repeat_char(repeat_char);
 
+    println!("repeat: {}, ctrl: {}", repeat_char, ctrl_char);
+
     let mut buf = String::new();
     let mut current_key = String::new();
     let mut state: Option<DecompressState> = None;
     let mut to_repeat = 1;
+    let mut expanding_repeats = false;
 
-    let mut i = 1;
-    while i < chars.len() {
-        if chars[i] == ctrl_char {
-            i += 1;
+    let mut i = 2;
+    for _ in 0..2 {
+        while i < chars.len() {
+            if chars[i] == ctrl_char && !expanding_repeats {
+                i += 1;
 
-            res.push_str(&buf);
-            buf.clear();
+                res.push_str(&buf);
+                buf.clear();
 
-            loop {
-                if chars[i] == '=' {
-                    current_key = buf.clone();
-                    buf.clear();
-                    state = Some(DecompressState::Mapping);
-                } else if chars[i] == mapping.ctrl_char {
-                    if let Some(state) = &state {
-                        match state {
-                            DecompressState::Mapping => {
-                                mapping.insert(current_key.clone(), buf.clone());
-                                current_key.clear();
-                                buf.clear();
-                                break;
+                loop {
+                    if chars[i] == '=' {
+                        current_key = buf.clone();
+                        buf.clear();
+                        state = Some(DecompressState::Mapping);
+                    } else if chars[i] == mapping.ctrl_char {
+                        if let Some(state) = &state {
+                            match state {
+                                DecompressState::Mapping => {
+                                    mapping.insert(current_key.clone(), buf.clone());
+                                    current_key.clear();
+                                    buf.clear();
+                                    break;
+                                }
+                                DecompressState::Repeat => {
+                                    res.push_str(&buf.repeat(to_repeat));
+                                    buf.clear();
+                                    break;
+                                }
                             }
-                            DecompressState::Repeat => {
-                                res.push_str(&buf.repeat(to_repeat));
-                                buf.clear();
-                                break;
-                            }
+                        } else {
+                            to_repeat = buf.parse().expect("Error getting repeat number");
+                            buf.clear();
+                            state = Some(DecompressState::Repeat);
                         }
                     } else {
-                        to_repeat = buf.parse().expect("Error getting repeat number");
-                        buf.clear();
-                        state = Some(DecompressState::Repeat);
+                        buf.push(chars[i]);
                     }
-                } else {
-                    buf.push(chars[i]);
+
+                    i += 1;
                 }
 
+                state = None;
+            } else if chars[i] == repeat_char && expanding_repeats {
                 i += 1;
+
+                res.push_str(&buf);
+                buf.clear();
+
+                while chars[i] != repeat_char {
+                    buf.push(chars[i]);
+                    i += 1;
+                }
+
+                i += 2;
+
+                let to_repeat = buf.parse().expect("Error getting repeat char number");
+                res.push_str(&chars[i - 1].to_string().repeat(to_repeat));
+                buf.clear();
+            } else {
+                buf.push(chars[i]);
             }
 
-            state = None;
-        } else {
-            buf.push(chars[i]);
+            i += 1;
         }
 
-        i += 1;
+        chars = res.chars().collect();
+        expanding_repeats = true;
+        i = 0;
     }
 
     res.push_str(&buf);
@@ -349,6 +372,7 @@ fn collapse_repeats(mapping: &mut Mapping, source: &mut String) {
         let substr = &source[i..j];
         let mut res_str = mapping.repeat_char.to_string();
         res_str.push_str(&diff.to_string());
+        res_str.push(mapping.repeat_char);
         res_str.push(source_chars[i]);
         *source = source.replace(substr, &res_str);
 
