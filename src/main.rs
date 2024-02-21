@@ -90,7 +90,12 @@ impl Mapping {
     }
 
     fn stringify(&self, compressed: String) -> String {
-        let mut res = {
+        let mut res = if self.values.len() > 0 {
+            let mut temp = String::from(self.repeat_char);
+            temp.push(self.ctrl_char);
+            temp.push(self.ctrl_char);
+            temp
+        } else {
             let mut temp = String::from(self.repeat_char);
             temp.push(self.ctrl_char);
             temp
@@ -113,7 +118,7 @@ impl Mapping {
     }
 
     fn predict_len(&self, source_len: usize) -> usize {
-        let mut key_len = if self.values.len() > 0 { 2 } else { 1 };
+        let mut key_len = if self.values.len() > 0 { 3 } else { 2 };
 
         for pair in self.values.iter() {
             // 3 because 1 for '=' and 2 for ctrl char
@@ -200,14 +205,13 @@ fn main() -> Result<()> {
             let outfile_name = info.to_owned() + ".smol";
 
             let source = fs::read_to_string(info)?;
-            let input = source.clone();
 
             let mut mapping = Mapping::new();
 
             let compressed_source = compress(&mut mapping, &source);
 
-            println!("{}", mapping);
-            println!("{}", input);
+            // println!("{}", mapping);
+            println!("{}", source);
 
             let res = mapping.stringify(compressed_source);
             println!("{}", res);
@@ -287,7 +291,9 @@ fn expand_gen_map(source: &mut String) -> Mapping {
                                 }
                             }
                         } else {
-                            to_repeat = buf.parse().expect("Error getting repeat number");
+                            to_repeat = buf
+                                .parse()
+                                .expect(&format!("Error getting repeat number: ({})", buf));
                             buf.clear();
                             state = Some(DecompressState::Repeat);
                         }
