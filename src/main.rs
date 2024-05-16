@@ -195,7 +195,8 @@ fn main() -> Result<()> {
             let res = decompress(&data);
 
             if let Some(output_file) = output_file {
-                // write
+                let mut file = File::create(output_file)?;
+                file.write_all(res.as_bytes())?;
             } else {
                 println!("{}", res);
             }
